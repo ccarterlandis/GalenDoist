@@ -1,2 +1,2 @@
-# todoister
-"two-dew-ist-er". Makes Todoist better! 
+# Google Calendar Helper for Todoist
+Makes the Todoist/Google Calendar integration better! 
