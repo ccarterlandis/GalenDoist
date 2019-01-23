@@ -1,7 +1,10 @@
-import requests
+import logging
 import pprint
+import requests
 
 pp = pprint.PrettyPrinter(indent=4)
+
+# logging = logging.logger()
 
 class TodoistMetadata():
     """Holds all Todoist API data, such as projects, tasks, and labels"""
@@ -12,44 +15,42 @@ class TodoistMetadata():
 
 class Task(TodoistMetadata):
     """Represents a Todoist task"""
-    def __init__(self, task):
-        # super(Task, self).__init__()
-        self.content = task['content']
-        self.project_id = task['project_id']
+    def __init__(self, task_data):
+        self.content = task_data['content']
+        self.project_id = task_data['project_id']
         self.project = next((project['name'] for project in self.projects if project['id'] == self.project_id), None)
-        self.label_ids = task['label_ids']
+        self.label_ids = task_data['label_ids']
         self.labels = [label['name'] for label in self.labels if label['id'] in self.label_ids]
-
         try:
-            self.due = task['due']
-        except KeyError as error:
+            self.due = task_data['due']
+        except KeyError:
             self.due = None
 
 class Project(TodoistMetadata):
     """Represents a Todoist project"""
     def __init__(self, ID, name):
-        # super(Project, self).__init__()
         self.ID = ID
         self.name = name
         self.raw_tasks = requests.get(
-                                "https://beta.todoist.com/API/v8/tasks",
-                                params={
-                                    "project_id": self.ID
-                                },
-                                headers={
-                                    "Authorization": "Bearer %s" % self._api_token
-                                }).json()
+            "https://beta.todoist.com/API/v8/tasks",
+            params={
+                "project_id": self.ID
+            },
+            headers={
+                "Authorization": "Bearer %s" % self._api_token
+            }).json()
+
         self.tasks = [Task(task) for task in self.raw_tasks]
 
-meta = TodoistMetadata()
+META = TodoistMetadata()
 
-all_projects = []
+ALL_PROJECTS = []
 
-for project in meta.projects:
-    all_projects.append(Project(project['id'], project['name']))
+for project in META.projects:
+    ALL_PROJECTS.append(Project(project['id'], project['name']))
 
-# all_projects.append(Project(meta.projects[15]['id'], meta.projects[15]['name']))
+# ALL_PROJECTS.append(Project(META.projects[15]['id'], META.projects[15]['name']))
 
-for project in all_projects:
+for project in ALL_PROJECTS:
     for task in project.tasks:
         print(f"Task: {task.content}\nProject: {task.project}\nLabels: {task.labels}\nDue: {task.due}\n----------------------------------")
