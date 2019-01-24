@@ -1,5 +1,8 @@
 from __future__ import print_function
-import datetime
+# import datetime
+import re
+from dateutil import parser
+import datetime as dt
 import pickle
 import os.path
 from googleapiclient.discovery import build
@@ -45,19 +48,33 @@ for project in ALL_PROJECTS:
     for task in project.tasks:
         if task.due is not None:
             event = {
-              'summary': f'{task.content}',
-              'start': {
-                'dateTime': '2019-01-23T16:00:00-07:00',
+                'summary': f'{task.content}',
+            }
+
+            # if task.due_time is not None:
+            #     end_time = str(task.due['datetime'])
+            #     start_time = re.sub(" ", "T", re.sub("\+.*", "Z", str(task.due_time - dt.timedelta(minutes=15))))
+
+            #     event['start'] = {
+            #         'dateTime': start_time,
+            #         'timeZone': 'America/Los_Angeles',
+            #     }
+            #     event['end'] = {
+            #         'dateTime': end_time,
+            #         'timeZone': 'America/Los_Angeles',
+            #     }
+
+            # else: 
+            event['start'] = {
+                'date': task.due['date'],
                 'timeZone': 'America/Los_Angeles',
-              },
-              'end': {
-                'dateTime': '2019-01-23T17:00:00-07:00',
+            }
+            event['end'] = {
+                'date': task.due['date'],
                 'timeZone': 'America/Los_Angeles',
-              }
             }
 
             event = service.events().insert(calendarId=f'{calendar_ids[task.project]}', body=event).execute()
-
 
 # now = datetime.datetime.utcnow().isoformat() + 'Z' # 'Z' indicates UTC time
 # print('Getting the upcoming 10 events')
