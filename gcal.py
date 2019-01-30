@@ -5,66 +5,98 @@ from dateutil import parser
 import datetime as dt
 import pickle
 import os.path
+import googleapiclient.errors
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-from todoist import ALL_PROJECTS
+from todoist import ALL_PROJECTS, META
 
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-creds = None
+CREDS = None
 if os.path.exists('token.pickle'):
     with open('token.pickle', 'rb') as token:
-        creds = pickle.load(token)
-if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        CREDS = pickle.load(token)
+if not CREDS or not CREDS.valid:
+    if CREDS and CREDS.expired and CREDS.refresh_token:
+        CREDS.refresh(Request())
     else:
-        flow = InstalledAppFlow.from_client_secrets_file(
+        FLOW = InstalledAppFlow.from_client_secrets_file(
             'credentials.json', SCOPES)
-        creds = flow.run_local_server()
+        CREDS = FLOW.run_local_server()
     with open('token.pickle', 'wb') as token:
-        pickle.dump(creds, token)
+        pickle.dump(CREDS, token)
 
-service = build('calendar', 'v3', credentials=creds)
+API_SERVICE = build('calendar', 'v3', credentials=CREDS)
 
-# Call the Calendar API
+class GCalAPIHelper(object):
+    """docstring for GCalAPIHelper"""
+    def __init__(self, _api_service):
+        self._api_service = _api_service
+        self.PAGE_TOKEN = None
+        self.MIN_ACCES_ROLE = "owner"
+        self.CALENDAR_IDS = {}
 
-page_token = None
-min_access_role = "owner"
-calendar_ids = {}
-while True:
-    calendar_list = service.calendarList().list(pageToken=page_token, minAccessRole=min_access_role).execute()
-    for calendar in calendar_list['items']:
-        calendar_ids[calendar['summary']] = calendar['id']
-        # print(calendar['id'])
-    page_token = calendar_list.get('nextPageToken')
-    if not page_token:
-        break
+        while True:
+            self.CALENDAR_LIST = self._api_service.calendarList().list(pageToken=self.PAGE_TOKEN, minAccessRole=self.MIN_ACCES_ROLE).execute()
+            for calendar in self.CALENDAR_LIST['items']:
+                if calendar['summary'] in [project.name for project in ALL_PROJECTS]:
+                    project = next((project for project in ALL_PROJECTS if project.name == calendar['summary']), None)
+                    project.calendar = calendar
+                    # print(calendar['id'], calendar['summary'])
+                    self.CALENDAR_IDS[calendar['summary']] = calendar['id']
 
-for project in ALL_PROJECTS:
-    for task in project.tasks:
-        if task.due is not None:
-            event = {
-                'summary': f'{task.content}',
-            }
+                    project.events = self.get_events_for_calendar(calendar['id'])
+                    self.set_events(project)
+                    project.events = self.get_events_for_calendar(calendar['id'])
 
-            # if task.due_time is not None:
-            #     end_time = str(task.due['datetime'])
-            #     start_time = re.sub(" ", "T", re.sub("\+.*", "Z", str(task.due_time - dt.timedelta(minutes=15))))
+            self.PAGE_TOKEN = self.CALENDAR_LIST.get('nextPageToken')
+            if not self.PAGE_TOKEN:
+                break
 
-            #     event['start'] = {
-            #         'dateTime': start_time,
-            #         'timeZone': 'America/Los_Angeles',
-            #     }
-            #     event['end'] = {
-            #         'dateTime': end_time,
-            #         'timeZone': 'America/Los_Angeles',
-            #     }
+    def get_events_for_calendar(self, calendar_id):
+        self.PAGE_TOKEN = None
+        while True:
+            events = self._api_service.events().list(calendarId=calendar_id, pageToken=self.PAGE_TOKEN).execute()
+            self.PAGE_TOKEN = events.get('nextPageToken')
+            if not self.PAGE_TOKEN:
+                break
+        return events
 
-            # else: 
+    def delete_events_for_completed_tasks(self, project):
+        calendar_id = project.calendar['id']
+        task_ids = [(task.task_id, task.labels, task.completed) for task in project.tasks]
+        event_ids = [int(event['id']) for event in project.events['items'] if "(TD)" in event['summary']]
+        for event_id in event_ids:
+            event = next((task_id for task_id in task_ids if event_id == task_id[0]), None)
+            if event is None:
+                self._api_service.events().move(calendarId=calendar_id, eventId=event_id, destination='sb5qfi0odh2afrf2jf9rkng52g@group.calendar.google.com').execute()
+
+    def create_event(self, task):
+        event = {
+            'id': f'{task.task_id}',
+            'summary': f'{task.display_content}',
+            'description': f'Auto-added by GalenDoist\nID: {task.task_id}\nProject: {task.project}\nPriority: {task.priority}\n'
+        }
+
+        # if task.due_time is not None:
+        #     end_time = str(task.due['datetime'])
+        #     start_time = re.sub(" ", "T", re.sub("\+.*", "Z", str(task.due_time - dt.timedelta(minutes=15))))
+
+        #     event['start'] = {
+        #         'dateTime': start_time,
+        #         'timeZone': 'America/Los_Angeles',
+        #     }
+        #     event['end'] = {
+        #         'dateTime': end_time,
+        #         'timeZone': 'America/Los_Angeles',
+        #     }
+        if False:
+            pass
+
+        else: 
             event['start'] = {
                 'date': task.due['date'],
                 'timeZone': 'America/Los_Angeles',
@@ -74,17 +106,22 @@ for project in ALL_PROJECTS:
                 'timeZone': 'America/Los_Angeles',
             }
 
-            event = service.events().insert(calendarId=f'{calendar_ids[task.project]}', body=event).execute()
+        return event
 
-# now = datetime.datetime.utcnow().isoformat() + 'Z' # 'Z' indicates UTC time
-# print('Getting the upcoming 10 events')
-# events_result = service.events().list(calendarId='primary', timeMin=now,
-#                                     maxResults=10, singleEvents=True,
-#                                     orderBy='startTime').execute()
-# events = events_result.get('items', [])
 
-# if not events:
-#     print('No upcoming events found.')
-# for event in events:
-#     start = event['start'].get('dateTime', event['start'].get('date'))
-#     print(start, event['summary'])
+    def set_events(self, project):
+        for task in [task for task in project.tasks if task.due is not None]:
+            event = self.create_event(task)
+            try:
+                result = self._api_service.events().update(eventId=task.task_id, calendarId=f'{self.CALENDAR_IDS[task.project]}', body=event).execute()
+                print(f'Updated event {task.task_id}: {task.display_content} in {task.project}')
+            except googleapiclient.errors.HttpError as err:
+                if err.resp.status in [404]:
+                    result = self._api_service.events().insert(calendarId=f'{self.CALENDAR_IDS[task.project]}', body=event).execute()
+                    print(f'Created event {task.task_id}: {task.display_content} in {task.project}')
+                else:
+                    print(err)
+
+        self.delete_events_for_completed_tasks(project)
+
+GCalAPIHelper(API_SERVICE)

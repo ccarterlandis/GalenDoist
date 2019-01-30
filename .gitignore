@@ -105,3 +105,5 @@ venv.bak/
 
 # other
 credentials.json
+client_id.json
+token.pickle
