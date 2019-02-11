@@ -4,19 +4,22 @@ import re
 from dateutil import parser
 import datetime as dt
 import pickle
-import os.path
+import os
+import requests
 import googleapiclient.errors
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-from todoist import ALL_PROJECTS, META
+from todoist_helper import TodoistMetadata, Project, Task
 
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
+cwd = os.path.dirname(os.path.realpath(__file__)) + '/'
+
 CREDS = None
-if os.path.exists('token.pickle'):
+if os.path.exists(cwd + 'token.pickle'):
     with open('token.pickle', 'rb') as token:
         CREDS = pickle.load(token)
 if not CREDS or not CREDS.valid:
@@ -24,40 +27,51 @@ if not CREDS or not CREDS.valid:
         CREDS.refresh(Request())
     else:
         FLOW = InstalledAppFlow.from_client_secrets_file(
-            'credentials.json', SCOPES)
+            cwd + 'credentials.json', SCOPES)
         CREDS = FLOW.run_local_server()
-    with open('token.pickle', 'wb') as token:
+    with open(cwd + 'token.pickle', 'wb') as token:
         pickle.dump(CREDS, token)
 
 API_SERVICE = build('calendar', 'v3', credentials=CREDS)
 
+
 class GCalAPIHelper(object):
     """docstring for GCalAPIHelper"""
-    def __init__(self, _api_service):
+    def __init__(self, _api_service, todoist_metadata):
+        self.todoist_metadata = todoist_metadata
+
+        self.todoist_projects = []
+
+        for project in self.todoist_metadata.PROJECTS:
+            self.todoist_projects.append(Project(project['id'], project['name']))
+
         self._api_service = _api_service
         self.PAGE_TOKEN = None
         self.MIN_ACCES_ROLE = "owner"
         self.CALENDAR_IDS = {}
+        self.ARCHIVE_CALENDAR_NAME = 'Archive'
+        self.ARCHIVE_CALENDAR_ID = None
 
         while True:
             self.CALENDAR_LIST = self._api_service.calendarList().list(pageToken=self.PAGE_TOKEN, minAccessRole=self.MIN_ACCES_ROLE).execute()
+            self.ARCHIVE_CALENDAR_ID = next((calendar['id'] for calendar in self.CALENDAR_LIST['items'] if calendar['summary'] == self.ARCHIVE_CALENDAR_NAME), None)
             for calendar in self.CALENDAR_LIST['items']:
-                if calendar['summary'] in [project.name for project in ALL_PROJECTS]:
-                    project = next((project for project in ALL_PROJECTS if project.name == calendar['summary']), None)
+                if calendar['summary'] in [project.project_name for project in self.todoist_projects]:
+                    project = next((project for project in self.todoist_projects if project.project_name == calendar['summary']), None)
                     project.calendar = calendar
-                    # print(calendar['id'], calendar['summary'])
                     self.CALENDAR_IDS[calendar['summary']] = calendar['id']
 
-                    project.events = self.get_events_for_calendar(calendar['id'])
                     self.set_events(project)
                     project.events = self.get_events_for_calendar(calendar['id'])
+
+                    self.delete_events_for_completed_tasks(project)
 
             self.PAGE_TOKEN = self.CALENDAR_LIST.get('nextPageToken')
             if not self.PAGE_TOKEN:
                 break
 
+
     def get_events_for_calendar(self, calendar_id):
-        self.PAGE_TOKEN = None
         while True:
             events = self._api_service.events().list(calendarId=calendar_id, pageToken=self.PAGE_TOKEN).execute()
             self.PAGE_TOKEN = events.get('nextPageToken')
@@ -66,13 +80,10 @@ class GCalAPIHelper(object):
         return events
 
     def delete_events_for_completed_tasks(self, project):
-        calendar_id = project.calendar['id']
-        task_ids = [(task.task_id, task.labels, task.completed) for task in project.tasks]
-        event_ids = [int(event['id']) for event in project.events['items'] if "(TD)" in event['summary']]
-        for event_id in event_ids:
-            event = next((task_id for task_id in task_ids if event_id == task_id[0]), None)
-            if event is None:
-                self._api_service.events().move(calendarId=calendar_id, eventId=event_id, destination='sb5qfi0odh2afrf2jf9rkng52g@group.calendar.google.com').execute()
+        for task in project.updated_tasks:
+            if task.deleted is True or task.archived is True or task.completed is True:
+                event = self._api_service.events().delete(calendarId=f'{self.CALENDAR_IDS[task.project]}', eventId=task.task_id).execute()
+                print(f'Deleted event {task.task_id}: {task.display_content} in {task.project}')
 
     def create_event(self, task):
         event = {
@@ -98,11 +109,11 @@ class GCalAPIHelper(object):
 
         else: 
             event['start'] = {
-                'date': task.due['date'],
+                'date': task.due_date,
                 'timeZone': 'America/Los_Angeles',
             }
             event['end'] = {
-                'date': task.due['date'],
+                'date': task.due_date,
                 'timeZone': 'America/Los_Angeles',
             }
 
@@ -110,7 +121,7 @@ class GCalAPIHelper(object):
 
 
     def set_events(self, project):
-        for task in [task for task in project.tasks if task.due is not None]:
+        for task in [task for task in project.updated_tasks if task.due is not None]:
             event = self.create_event(task)
             try:
                 result = self._api_service.events().update(eventId=task.task_id, calendarId=f'{self.CALENDAR_IDS[task.project]}', body=event).execute()
@@ -122,6 +133,7 @@ class GCalAPIHelper(object):
                 else:
                     print(err)
 
-        self.delete_events_for_completed_tasks(project)
+todoist_metadata = TodoistMetadata()
+GCalAPIHelper(API_SERVICE, todoist_metadata)
 
-GCalAPIHelper(API_SERVICE)
+print("Finished syncing.")
