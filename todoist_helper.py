@@ -16,6 +16,7 @@ class TodoistMetadata():
     TASKS = requests.get("https://beta.todoist.com/API/v8/tasks", headers={"Authorization": "Bearer %s" % _API_TOKEN}).json()
     LABELS = requests.get("https://beta.todoist.com/API/v8/labels", headers={"Authorization": "Bearer %s" % _API_TOKEN}).json()
     PLANNING_LABEL_ID = next((label['id'] for label in LABELS if label['name'] == "planning"), None)
+    PLANNED_LABEL_ID = next((label['id'] for label in LABELS if label['name'] == "planned"), None)
     ASSIGNMENT_LABEL_ID = next((label['id'] for label in LABELS if label['name'] == "assignment"), None)
     DUE_LABEL_ID = next((label['id'] for label in LABELS if label['name'] == "due"), None)
     DONT_SYNC_LABEL_ID = next((label['id'] for label in LABELS if label['name'] == "ds"), None)
@@ -85,11 +86,12 @@ class Task(TodoistMetadata):
                 print("Adding planning label to task " + str(self.task_id) + ": " + self.content)
                 self.label_ids.append(self.PLANNING_LABEL_ID)
 
-        if 'assignment' in self.labels:
+        if 'assignment' in self.labels and 'planned' not in self.labels:
             if not self.deleted and not self.archived and not self.completed:
                 self.create_assignment_task(1)
                 self.create_assignment_task(2)
                 self.create_assignment_task(3)
+                self.label_ids.append(self.PLANNED_LABEL_ID)
 
         self.format_for_display()
         self.update_task()
@@ -122,8 +124,8 @@ class Task(TodoistMetadata):
             })
 
     def create_assignment_task(self, offset):
-        # print("DAY: " + str((dt.datetime.strptime(self.due_date, "%Y-%m-%d") - dt.timedelta(days=offset)).date()))
         new_date = str((dt.datetime.strptime(self.due_date, "%Y-%m-%d") - dt.timedelta(days=offset)).date())
+        self.label_ids.remove(self.ASSIGNMENT_LABEL_ID)
         print(requests.post(
             "https://beta.todoist.com/API/v8/tasks",
             data=json.dumps({
@@ -137,6 +139,7 @@ class Task(TodoistMetadata):
                 "X-Request-Id": str(uuid.uuid4()),
                 "Authorization": "Bearer %s" % self._API_TOKEN
             }))
+        self.label_ids.append(self.ASSIGNMENT_LABEL_ID)
 
 class Project(TodoistMetadata):
     """Represents a Todoist project"""
